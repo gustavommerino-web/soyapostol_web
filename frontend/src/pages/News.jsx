@@ -11,15 +11,15 @@ const CACHED_PREVIEW = 5;                          // items persisted per source
 const SOURCES = ["all", "vatican", "aci"]; // tab order
 const SOURCE_META = {
     vatican: {
-        esLabel: "Vaticano",
-        enLabel: "Vatican",
+        esLabel: "Vatican News",
+        enLabel: "Vatican News",
         pillColor: "bg-sangre text-sand-50",
         pillSoft: "bg-sangre/10 text-sangre",
     },
     aci: {
-        // Spanish shows "ACI Prensa"; English shows the sister agency "CNA".
+        // Spanish shows "ACI Prensa"; English shows the sister agency "EWTN News".
         esLabel: "ACI Prensa",
-        enLabel: "CNA",
+        enLabel: "EWTN News",
         pillColor: "bg-stone900 text-sand-50",
         pillSoft: "bg-stone900/10 text-stone900",
     },
@@ -225,7 +225,7 @@ function SourceLink({ lang, id }) {
     };
     const label = lang === "es"
         ? (id === "vatican" ? "Vatican News" : "ACI Prensa")
-        : (id === "vatican" ? "Vatican News" : "CNA");
+        : (id === "vatican" ? "Vatican News" : "EWTN News");
     return (
         <a href={hrefMap[id]} target="_blank" rel="noreferrer"
             className="hover:text-sangre">{label}</a>

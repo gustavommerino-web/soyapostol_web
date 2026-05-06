@@ -38,7 +38,7 @@ FEEDS = {
             "link": "https://www.vaticannews.va/en.html",
         },
         "aci": {
-            "label": "CNA",
+            "label": "EWTN News",
             "url": "https://www.ewtnnews.com/rss?redirectedfrom=cna",
             "link": "https://www.ewtnnews.com/",
         },
