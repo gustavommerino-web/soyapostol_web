@@ -191,7 +191,7 @@ export default function Layout() {
 
             {/* Footer (desktop only) */}
             <footer className="hidden lg:block border-t border-sand-300 py-6 px-6 lg:px-10 text-center">
-                <p className="label-eyebrow">soyapostol &middot; Ad maiorem Dei gloriam</p>
+                <p className="label-eyebrow">2026 Corazones a la Obra &middot; AD MAIOREM DEI GLORIAM</p>
             </footer>
 
             {/* Mobile bottom navigation */}
