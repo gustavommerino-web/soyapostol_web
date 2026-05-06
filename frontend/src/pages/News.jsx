@@ -281,7 +281,7 @@ function NewsCard({ item, idx, lang, showBadge, formatDate, viewLabel }) {
                             {badgeLabel}
                         </span>
                     ) : (
-                        <span className="label-eyebrow text-sangre">{item.source}</span>
+                        <span className="label-eyebrow text-sangre">{badgeLabel}</span>
                     )}
                     <span className="text-xs text-stoneFaint">{formatDate(item.published)}</span>
                 </div>
