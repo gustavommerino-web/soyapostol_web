@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useFavoritesCount } from "@/contexts/FavoritesCountContext";
 import { localDateISO } from "@/lib/localDate";
 import api from "@/lib/api";
+import { loadReadings } from "@/lib/readingsCache";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import BackToTopButton from "@/components/BackToTopButton";
@@ -112,8 +113,9 @@ export default function Readings() {
         let cancelled = false;
         setLoading(true);
         setError(false);
-        api.get("/readings", { params: { lang, date: localDate } })
-            .then((res) => { if (!cancelled) setData(res.data); })
+        const todayISO = localDateISO();
+        loadReadings({ date: localDate, lang, todayISO })
+            .then(({ data }) => { if (!cancelled) setData(data); })
             .catch(() => { if (!cancelled) setError(true); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };

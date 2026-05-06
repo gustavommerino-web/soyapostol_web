@@ -18,6 +18,7 @@ from news import router as news_router
 from catechism import router as catechism_router
 from favorites import router as favorites_router
 from readings import router as readings_router
+from webauthn_routes import router as webauthn_router, ensure_indexes as ensure_webauthn_indexes
 
 # MongoDB
 mongo_url = os.environ['MONGO_URL']
@@ -41,6 +42,7 @@ api_router.include_router(news_router)
 api_router.include_router(catechism_router)
 api_router.include_router(favorites_router)
 api_router.include_router(readings_router)
+api_router.include_router(webauthn_router)
 
 app.include_router(api_router)
 
@@ -81,6 +83,7 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def on_startup():
     await ensure_indexes(db)
+    await ensure_webauthn_indexes(db)
     await seed_admin(db)
     # Indexes for the prayers collection
     await db.prayers.create_index([("lang", 1), ("slug", 1)], unique=True)

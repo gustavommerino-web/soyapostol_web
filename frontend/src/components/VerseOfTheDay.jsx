@@ -52,9 +52,8 @@ export default function VerseOfTheDay() {
         fetch("/data/verse-of-the-day.json", { cache: "force-cache" })
             .then((r) => r.json())
             .then((j) => { if (!cancelled) setList(j.verses || []); })
-            .catch((e) => {
+            .catch(() => {
                 if (!cancelled) {
-                    console.warn("[VerseOfTheDay] list fetch failed:", e?.message || e);
                     setError("list");
                 }
             });
@@ -66,9 +65,8 @@ export default function VerseOfTheDay() {
         let cancelled = false;
         loadBible(lang)
             .then((d) => { if (!cancelled) setData(d); })
-            .catch((e) => {
+            .catch(() => {
                 if (!cancelled) {
-                    console.warn("[VerseOfTheDay] bible load failed:", e?.message || e);
                     setError("bible");
                 }
             });
@@ -112,8 +110,7 @@ export default function VerseOfTheDay() {
         try {
             await navigator.clipboard.writeText(formatted);
             toast.success(t("bible.verse_copied"));
-        } catch (e) {
-            console.warn("[VerseOfTheDay] clipboard copy failed:", e?.message || e);
+        } catch {
             toast.error(t("common.error"));
         }
     };
@@ -123,9 +120,8 @@ export default function VerseOfTheDay() {
             try {
                 await navigator.share({ title: t("bible.share_title"), text: formatted });
                 return;
-            } catch (e) {
+            } catch {
                 // User cancelled or browser blocked it — fall back to copy.
-                console.debug("[VerseOfTheDay] share cancelled:", e?.message || e);
             }
         }
         await doCopy();

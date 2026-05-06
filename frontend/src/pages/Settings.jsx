@@ -13,7 +13,16 @@ import {
     X,
     SpinnerGap,
     Translate,
+    FingerprintSimple,
 } from "@phosphor-icons/react";
+import {
+    registerPasskey,
+    listPasskeys,
+    deletePasskey,
+    platformAuthenticatorAvailable,
+    passkeyHint,
+} from "@/lib/webauthn";
+import { toast } from "sonner";
 
 const PRIVACY_POLICY_URL = "/privacy-policy.html";
 const SUPPORT_EMAIL     = "gustavommerino@gmail.com";
@@ -145,6 +154,177 @@ function linkifySources(text) {
         );
     });
 }
+
+
+// ----------------------------------------------------------------------
+// BiometricSection — Face ID / Touch ID enrol + manage registered devices
+// ----------------------------------------------------------------------
+
+function BiometricSection({ lang, t }) {
+    const [supported, setSupported] = React.useState(null); // null = checking
+    const [creds, setCreds] = React.useState([]);
+    const [loading, setLoading] = React.useState(true);
+    const [busy, setBusy] = React.useState(false);
+
+    const refresh = React.useCallback(async () => {
+        setLoading(true);
+        try {
+            const list = await listPasskeys();
+            setCreds(list);
+            if (list.length > 0) passkeyHint.set();
+            else passkeyHint.clear();
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    React.useEffect(() => {
+        let cancelled = false;
+        platformAuthenticatorAvailable().then((ok) => {
+            if (!cancelled) setSupported(ok);
+        });
+        refresh();
+        return () => { cancelled = true; };
+    }, [refresh]);
+
+    const onEnable = async () => {
+        setBusy(true);
+        try {
+            await registerPasskey();
+            toast.success(lang === "es" ? "Biometría activada" : "Biometric enabled");
+            await refresh();
+        } catch (e) {
+            const name = e?.name || "";
+            if (name === "NotAllowedError" || name === "AbortError") {
+                // user cancelled → silent
+            } else if (e?.response?.status === 400 || e?.response?.status === 401) {
+                toast.error(lang === "es" ? "No se pudo registrar" : "Could not register");
+            } else {
+                toast.error(lang === "es" ? "Error al activar biometría" : "Failed to enable biometric");
+            }
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const onForget = async (cid) => {
+        setBusy(true);
+        try {
+            await deletePasskey(cid);
+            toast.success(lang === "es" ? "Dispositivo eliminado" : "Device removed");
+            await refresh();
+        } catch {
+            toast.error(t("common.error"));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    // Don't show the section at all if the device can't do biometrics
+    // AND the user has no existing credentials registered elsewhere.
+    if (supported === false && creds.length === 0) return null;
+
+    return (
+        <section className="mb-12" data-testid="settings-biometric">
+            <header className="flex items-center gap-3 mb-5">
+                <span
+                    className="shrink-0 w-10 h-10 rounded-full bg-sangre/10 text-sangre flex items-center justify-center"
+                    aria-hidden="true"
+                >
+                    <FingerprintSimple size={20} weight="duotone" />
+                </span>
+                <div>
+                    <p className="label-eyebrow">{lang === "es" ? "Seguridad" : "Security"}</p>
+                    <h2 className="heading-serif text-2xl sm:text-3xl tracking-tight m-0">
+                        {lang === "es" ? "Face ID / Touch ID" : "Face ID / Touch ID"}
+                    </h2>
+                </div>
+            </header>
+
+            <article className="surface-card p-5 sm:p-6" data-testid="settings-biometric-card">
+                <p className="ui-sans text-sm leading-relaxed text-stoneMuted mb-4">
+                    {lang === "es"
+                        ? "Activa el inicio de sesión con biometría para entrar más rápido y de forma segura. La huella o reconocimiento facial se guarda solo en este dispositivo."
+                        : "Enable biometric sign-in for faster, more secure access. Your fingerprint or face data stays on this device only."}
+                </p>
+
+                {loading && <p className="text-stoneMuted text-sm">{t("common.loading")}</p>}
+
+                {!loading && (
+                    <>
+                        {supported && (
+                            <button
+                                type="button"
+                                onClick={onEnable}
+                                disabled={busy}
+                                data-testid="settings-biometric-enable"
+                                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md bg-sangre text-sand-50 ui-sans text-sm font-semibold hover:bg-sangre/90 transition-colors disabled:opacity-60"
+                            >
+                                <FingerprintSimple size={16} weight="duotone" />
+                                {busy
+                                    ? t("common.loading")
+                                    : (lang === "es" ? "Activar en este dispositivo" : "Enable on this device")}
+                            </button>
+                        )}
+                        {!supported && (
+                            <p className="text-sm text-stoneFaint italic" data-testid="settings-biometric-unsupported">
+                                {lang === "es"
+                                    ? "Este navegador o dispositivo no admite biometría (Face ID / Touch ID)."
+                                    : "This browser or device does not support biometric authentication."}
+                            </p>
+                        )}
+
+                        {creds.length > 0 && (
+                            <div className="mt-6" data-testid="settings-biometric-list">
+                                <p className="label-eyebrow mb-3">
+                                    {lang === "es" ? "Dispositivos registrados" : "Registered devices"}
+                                </p>
+                                <ul className="space-y-2">
+                                    {creds.map((c) => (
+                                        <li
+                                            key={c.credential_id}
+                                            data-testid={`settings-biometric-item-${c.credential_id.slice(0, 8)}`}
+                                            className="flex items-center justify-between gap-4 p-3 border border-sand-300 rounded-md"
+                                        >
+                                            <div className="min-w-0">
+                                                <p className="ui-sans text-sm font-semibold text-stone900 truncate">
+                                                    {c.device_name || (lang === "es" ? "Dispositivo" : "Device")}
+                                                </p>
+                                                <p className="text-xs text-stoneFaint">
+                                                    {lang === "es" ? "Registrado: " : "Registered: "}
+                                                    {c.created_at ? new Date(c.created_at).toLocaleDateString(lang === "es" ? "es-ES" : "en-US") : "—"}
+                                                    {c.last_used_at && (
+                                                        <>
+                                                            {" · "}
+                                                            {lang === "es" ? "último uso " : "last used "}
+                                                            {new Date(c.last_used_at).toLocaleDateString(lang === "es" ? "es-ES" : "en-US")}
+                                                        </>
+                                                    )}
+                                                </p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => onForget(c.credential_id)}
+                                                disabled={busy}
+                                                aria-label={lang === "es" ? "Olvidar dispositivo" : "Forget device"}
+                                                title={lang === "es" ? "Olvidar dispositivo" : "Forget device"}
+                                                data-testid={`settings-biometric-forget-${c.credential_id.slice(0, 8)}`}
+                                                className="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-md text-stoneMuted hover:text-sangre hover:bg-sangre/5 disabled:opacity-50"
+                                            >
+                                                <Trash size={16} weight="duotone" />
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+                    </>
+                )}
+            </article>
+        </section>
+    );
+}
+
 
 export default function Settings() {
     const { t, lang, setLang } = useLang();
@@ -287,6 +467,12 @@ export default function Settings() {
                     )}
                 </article>
             </section>
+
+            {/* ============================================================ */}
+            {/* Biometría — Face ID / Touch ID                               */}
+            {/* ============================================================ */}
+            {user && user.email && <BiometricSection lang={lang} t={t} />}
+
 
             {/* ============================================================ */}
             {/* Sobre la App — Quiénes Somos                                 */}

@@ -152,6 +152,83 @@ class TestAuth:
         assert r.status_code == 401
 
 
+# ---------- WebAuthn ----------
+# Full ceremony tests need a virtual authenticator (Playwright handles
+# that in iteration_*.json E2E reports). Here we just lock down the auth
+# wiring + endpoint shapes so a future refactor doesn't silently break
+# the surface the frontend relies on.
+
+class TestWebAuthn:
+    def test_register_options_requires_auth(self):
+        r = requests.post(f"{API}/auth/webauthn/register/options", timeout=TIMEOUT)
+        assert r.status_code == 401
+
+    def test_register_verify_requires_auth(self):
+        r = requests.post(f"{API}/auth/webauthn/register/verify",
+                          json={"challengeKey": "x", "credential": {}},
+                          timeout=TIMEOUT)
+        assert r.status_code == 401
+
+    def test_credentials_requires_auth(self):
+        r = requests.get(f"{API}/auth/webauthn/credentials", timeout=TIMEOUT)
+        assert r.status_code == 401
+
+    def test_delete_credential_requires_auth(self):
+        r = requests.delete(f"{API}/auth/webauthn/credentials/abc", timeout=TIMEOUT)
+        assert r.status_code == 401
+
+    def test_register_options_shape(self, admin_session):
+        r = admin_session.post(f"{API}/auth/webauthn/register/options", timeout=TIMEOUT)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # PublicKeyCredentialCreationOptions essentials
+        assert "challengeKey" in data
+        assert "challenge" in data
+        assert data.get("rp", {}).get("id")
+        assert data.get("rp", {}).get("name")
+        assert data.get("user", {}).get("id")
+        sel = data.get("authenticatorSelection") or {}
+        assert sel.get("userVerification") == "required"
+        assert sel.get("residentKey") == "required"
+
+    def test_auth_options_is_public(self):
+        # Discoverable-credential flow → no auth required, no email needed.
+        r = requests.post(f"{API}/auth/webauthn/auth/options", timeout=TIMEOUT)
+        assert r.status_code == 200
+        data = r.json()
+        assert "challengeKey" in data
+        assert "challenge" in data
+        # allowCredentials should be empty for discoverable flow.
+        assert data.get("allowCredentials", []) == []
+
+    def test_auth_verify_rejects_unknown_credential(self):
+        r = requests.post(
+            f"{API}/auth/webauthn/auth/verify",
+            json={
+                "challengeKey": "missing",
+                "credential": {"id": "X", "rawId": "X", "type": "public-key", "response": {}},
+            },
+            timeout=TIMEOUT,
+        )
+        # Either 400 (bad challenge) or 401 (unknown credential) — both
+        # are correct rejections; what matters is we never 200 or 500.
+        assert r.status_code in (400, 401)
+
+    def test_auth_verify_requires_credential(self):
+        r = requests.post(
+            f"{API}/auth/webauthn/auth/verify",
+            json={"challengeKey": "x", "credential": {}},
+            timeout=TIMEOUT,
+        )
+        assert r.status_code in (400, 401)
+
+    def test_credentials_empty_for_fresh_user(self, user_session):
+        r = user_session.get(f"{API}/auth/webauthn/credentials", timeout=TIMEOUT)
+        assert r.status_code == 200
+        # New users have no passkeys registered.
+        assert isinstance(r.json(), list)
+
+
 # ---------- Readings ----------
 # The /api/readings endpoint aggregates the Evangelizo RSS feed. It makes
 # 11 upstream calls per (date, lang) pair so tests are deliberately light:

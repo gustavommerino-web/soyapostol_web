@@ -4,13 +4,12 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useFavoritesCount } from "@/contexts/FavoritesCountContext";
 import api from "@/lib/api";
 import { toast } from "sonner";
-import FavoriteButton from "@/components/FavoriteButton";
 import BackToTopButton from "@/components/BackToTopButton";
 import PrayersAdmin from "@/components/PrayersAdmin";
 import { useLongPress, ContextMenu } from "@/components/LongPressMenu";
 import { useNavigate } from "react-router-dom";
 import {
-    CaretLeft, MagnifyingGlass, Heart, Copy, ShareNetwork,
+    CaretLeft, MagnifyingGlass, Heart, Copy, ShareNetwork, DotsThreeVertical,
 } from "@phosphor-icons/react";
 
 const PRAYERS_CHANGED = "soyapostol-prayers-changed";
@@ -77,10 +76,9 @@ export default function Prayers() {
                 {contentLoading && <p className="text-stoneMuted">{t("common.loading")}</p>}
                 {content && (
                     <article className="reading-prose">
-                        <div className="flex items-center justify-between border-b border-sand-300 pb-2 mb-6 gap-4">
+                        <div className="relative flex items-center justify-between border-b border-sand-300 pb-2 mb-6 gap-4">
                             <h1 className="heading-serif text-3xl sm:text-4xl tracking-tight leading-tight m-0">{content.title}</h1>
-                            <FavoriteButton section="prayers" title={content.title} content={content.content}
-                                source_url={content.source_url} testId="fav-prayer" />
+                            <PrayerDetailMenuButton content={content} />
                         </div>
                         {content.content.split(/\n+/).filter(Boolean).map((p, i) => <p key={i}>{p}</p>)}
                     </article>
@@ -286,5 +284,115 @@ function PrayerContextMenu({ item, category, onDismiss }) {
             onDismiss={onDismiss}
             testId={`prayer-menu-${item.slug}`}
         />
+    );
+}
+
+/* ================================================================== */
+/* PrayerDetailMenuButton — 3-dot context menu rendered in the prayer  */
+/* detail header (replaces the old "Add to Favorites" button to keep   */
+/* parity with Readings cards). Operates on the already-loaded         */
+/* `content` payload to avoid a redundant fetch.                       */
+/* ================================================================== */
+
+function PrayerDetailMenuButton({ content }) {
+    const { t, lang } = useLang();
+    const { user } = useAuth();
+    const { refresh: refreshCount } = useFavoritesCount();
+    const navigate = useNavigate();
+    const [menuOpen, setMenuOpen] = React.useState(false);
+
+    const formatBody = () => {
+        const cat = content.category ? `[${content.category}]\n\n` : "";
+        return `${content.title}\n${cat}${content.content}`.trim();
+    };
+
+    const doFavorite = async () => {
+        if (!user) { navigate("/login"); return; }
+        try {
+            await api.post("/favorites", {
+                section: "prayers",
+                title: content.title,
+                content: content.content,
+                source_url: content.source_url,
+                metadata: { category: content.category },
+                lang,
+            });
+            refreshCount();
+            toast.success(t("common.saved"));
+        } catch {
+            toast.error(t("common.error"));
+        }
+    };
+
+    const doCopy = async () => {
+        try {
+            await navigator.clipboard.writeText(formatBody());
+            toast.success(t("prayers_actions.copied"));
+        } catch {
+            toast.error(t("common.error"));
+        }
+    };
+
+    const doShare = async () => {
+        const text = formatBody();
+        if (navigator.share) {
+            try {
+                await navigator.share({
+                    title: t("prayers_actions.share_title"),
+                    text,
+                    url: content.source_url || undefined,
+                });
+                return;
+            } catch { /* user cancelled — silently fall through to copy */ }
+        }
+        try {
+            await navigator.clipboard.writeText(text);
+            toast.success(t("prayers_actions.copied"));
+        } catch {
+            toast.error(t("common.error"));
+        }
+    };
+
+    const items = [
+        {
+            id: "fav",
+            label: t("common.save_favorite"),
+            icon: <Heart size={16} weight="duotone" />,
+            onSelect: doFavorite,
+        },
+        {
+            id: "copy",
+            label: t("prayers_actions.copy"),
+            icon: <Copy size={16} weight="duotone" />,
+            onSelect: doCopy,
+        },
+        {
+            id: "share",
+            label: t("prayers_actions.share"),
+            icon: <ShareNetwork size={16} weight="duotone" />,
+            onSelect: doShare,
+        },
+    ];
+
+    return (
+        <>
+            <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setMenuOpen(true); }}
+                aria-label={t("common.save_favorite")}
+                title={t("prayers_actions.long_press_hint")}
+                data-testid="prayer-detail-actions-btn"
+                className="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-md text-stoneMuted hover:text-sangre hover:bg-sangre/5 transition-colors"
+            >
+                <DotsThreeVertical size={20} weight="bold" />
+            </button>
+            {menuOpen && (
+                <ContextMenu
+                    items={items}
+                    onDismiss={() => setMenuOpen(false)}
+                    testId="prayer-detail-menu"
+                />
+            )}
+        </>
     );
 }

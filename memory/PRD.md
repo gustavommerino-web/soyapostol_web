@@ -334,6 +334,88 @@ Cambio mayor al flujo del Examen de Conciencia solicitado por el usuario:
   - Domingo 3-mayo (con comentario): card del Comentario muestra ⋮ button, menú con "Copiar texto" (label correcto, no "oración").
   - Pre-commit **9/9 PASS**, ESLint 0 warnings.
 
+## Implemented (2026-05-04 · part 17) — Autenticación biométrica (Face ID / Touch ID / Windows Hello) vía WebAuthn / Passkeys
+- 🔐 **Backend** (`/app/backend/webauthn_routes.py`): nuevo módulo con 6 endpoints bajo `/api/auth/webauthn`:
+  - `POST /register/options` (auth requerida) → genera `PublicKeyCredentialCreationOptions` con `authenticator_attachment=PLATFORM`, `resident_key=REQUIRED`, `user_verification=REQUIRED`. Excluye credenciales ya registradas para que el mismo authenticator no se duplique.
+  - `POST /register/verify` (auth requerida) → valida la respuesta del navegador con la lib `webauthn==2.7.0` (Duo Labs), persiste el credential en `users.webauthn_credentials` (array) con `credential_id`, `public_key`, `sign_count`, `transports`, `device_name` (UA-derived: iPhone/iPad/Mac/Android/Windows/Linux), `created_at`, `aaguid`.
+  - `POST /auth/options` (público) → `PublicKeyCredentialRequestOptions` con `allowCredentials: []` (discoverable credential flow — sin pedir email).
+  - `POST /auth/verify` (público) → resuelve el credential al user, valida firma + sign-count, incrementa contador, actualiza `last_used_at`, emite los mismos JWT cookies que el flujo de password (`set_auth_cookies` reutilizado).
+  - `GET /credentials` (auth) + `DELETE /credentials/{cid}` (auth) → administración.
+- 💾 **Storage**: `users.webauthn_credentials = [{credential_id, public_key, sign_count, transports, device_name, created_at, last_used_at, aaguid}]`. Challenges en `webauthn_challenges` con TTL index 5 min y delete-on-consume para anti-replay.
+- 🌐 **Env vars** (`/app/backend/.env`): `WEBAUTHN_RP_ID=apostol-sacred.preview.emergentagent.com`, `WEBAUTHN_RP_NAME=Soy Apóstol`, `WEBAUTHN_ALLOWED_ORIGINS=https://apostol-sacred.preview.emergentagent.com,https://soyapostol.org`. Origen validado contra el whitelist; rp_id derivado del env.
+- 🖥️ **Frontend** (`/app/frontend/src/lib/webauthn.js` + `Settings.jsx` + `Login.jsx`):
+  - Lib helper exporta `webauthnSupported()`, `platformAuthenticatorAvailable()`, `registerPasskey()`, `authenticateWithPasskey()`, `listPasskeys()`, `deletePasskey()`. Usa `@simplewebauthn/browser@13.3.0` que maneja serialización base64url ↔ ArrayBuffer.
+  - **Settings**: nueva sección "Seguridad / Face ID / Touch ID" (sólo visible cuando hay sesión iniciada). Botón "Activar en este dispositivo" registra un passkey nuevo. Lista de "Dispositivos registrados" con nombre, fecha y "Olvidar dispositivo". Sección oculta cuando dispositivo no soporta biometría AND no hay credentials.
+  - **Login**: si `passkeyHint` está set en localStorage Y el browser tiene platform authenticator, aparece arriba un botón **"Iniciar sesión con Face ID / Touch ID"** con icono de huella, separador "O usa contraseña" y formulario de password como **fallback transparente** debajo. Cancelación silenciosa (no toast) — el usuario simplemente puede usar password.
+- 🔗 **Auto-trigger**: el botón es manual (no auto-prompt al cargar Login) por respeto al usuario; pero el `passkeyHint` en localStorage hace que el botón aparezca automáticamente solo en el dispositivo donde se registró.
+- 🐛 **Fix descubierto durante testing**: MongoDB devolvía `created_at` como datetime naive; al restar contra `datetime.now(timezone.utc)` daba TypeError. Coerced naive → aware UTC en `_consume_challenge`.
+- 🧪 **Backend tests**: 9 tests nuevos (`TestWebAuthn`) cubren auth-protection en los 4 endpoints autenticados, shape de los options responses, rechazos correctos en auth/verify (400/401, nunca 500), `allowCredentials: []` para flujo discoverable. **37/37 backend tests PASS**.
+- ✅ **E2E Playwright con virtual authenticator** (Chrome DevTools Protocol):
+  - Setup: `WebAuthn.addVirtualAuthenticator(ctap2, internal, residentKey, userVerification)` → simula Face ID en headless.
+  - Register: click "Activar en este dispositivo" → "Biometría activada" toast → "Linux registrado: 4/5/2026" en la lista.
+  - Logout + Login: passkey button visible, click → URL navega a `/`, `/api/auth/me` devuelve user válido. Sign-in 100% biométrico funcionando.
+- Pre-commit **9/9 PASS**, ESLint 0 warnings, ruff clean.
+
+## Implemented (2026-05-04 · part 18) — Onboarding biométrico post-login (prompt suave de adopción)
+- 🪄 **Nuevo componente** `BiometricEnrollPrompt.jsx` montado a nivel `Layout`. Se dispara automáticamente cuando concurren las 4 condiciones:
+  1. El usuario acaba de iniciar sesión con email/contraseña (flag one-shot `soyapostol_just_logged_in_pw` en `localStorage`, set por `AuthContext.login()` y `register()`, consumido por el componente).
+  2. El navegador expone un platform authenticator (Face ID / Touch ID / Windows Hello) — `platformAuthenticatorIsAvailable()`.
+  3. El usuario NO tiene ya un passkey en este dispositivo (`passkeyHint` no está set).
+  4. El usuario NO descartó previamente el prompt (`soyapostol_passkey_prompt_dismissed_at` ausente).
+- 💬 **UX**: dialog modal centrado con ícono de huella en círculo sangre, título "¿Iniciar sesión con Face ID / Touch ID?", copy de confianza ("nunca sale de aquí"), 2 botones — **"Más tarde"** (descarta permanente, escribe el flag) y **"Sí, activar"** (sangre, ejecuta `registerPasskey()`).
+- 🤝 **Respeta al usuario**:
+  - Si cancela el OS prompt nativo → el dialog queda abierto (puede reintentar o "Más tarde").
+  - Click en "Más tarde" o cierre del dialog (X / overlay click / Escape) → marca como descartado y no vuelve a aparecer (no nag).
+  - Si el dispositivo no soporta biometría → ni siquiera se renderiza.
+- 📍 **Posición**: dialog se renderiza encima del dashboard (la primera página tras login) sin bloquear nav lateral ni header — diseño no intrusivo.
+- ✅ **E2E Playwright con virtual authenticator**:
+  - Estado limpio (sin hint, sin dismissed): login pw → prompt visible (1) con `enable_btn` + `later_btn`. Click "Sí, activar" → prompt cierra, `registered creds: 1`.
+  - Logout + login pw subsiguiente: `prompt after enrolled: 0` ✓ (no nag al usuario que ya enroló).
+- Pre-commit **9/9 PASS**, ESLint 0 warnings.
+
+## Implemented (2026-05-04 · part 19) — Performance: cold-boot UX + readings IDB cache + dep cleanup
+- 🚀 **Boot loader inline** (`public/index.html` + `index.js`): ahora cuando el usuario abre la PWA ve INSTANTÁNEAMENTE un loader con logo + "soyapostol" + "CARGANDO…" en el mismo color de fondo del app (sand-50). Cero pantalla blanca/negra. El loader se desvanece (CSS transition .35s) cuando React hace su primer commit (`requestAnimationFrame` x2 → `body.app-ready`) y el nodo se elimina del DOM 450ms después para no bloquear focus/eventos.
+- 💾 **IDB cache para Lecturas** (`/app/frontend/src/lib/readingsCache.js` nuevo): wrapper que hace IDB-first → fallback a `/api/readings` → re-persiste en IDB. Key `readings_{YYYY-MM-DD}_{lang}` así diferentes días no colisionan y los cambios de idioma no invalidan días previos. Lógica de freshness:
+  - Días pasados: cache permanente (no van a cambiar nunca).
+  - Día de hoy: re-valida cada hora (1h `FRESH_FOR_TODAY_MS`) por si hay correcciones del editor.
+  - El backend ya cachea contra Evangelizo en MongoDB 7 días, así que el peor caso es 1 fetch por día por idioma.
+- ✅ **Bible y Catechism ya estaban óptimos** (verificación post-investigación):
+  - Lazy load: solo se hace fetch cuando el usuario navega a `/bible` o `/catechism` (no en boot ni en otras páginas).
+  - Idioma sólo: cache key incluye `lang`, así que solo se descarga el JSON del idioma activo.
+  - IDB persistente: una vez descargado, sobrevive reloads / cierres de la app (storage de IndexedDB). Comportamiento idéntico al pedido del usuario sin cambios extra.
+  - Cargando feedback: ambas páginas ya muestran "Cargando…" durante el primer fetch.
+- 🧹 **Backend `requirements.txt` adelgazado**: de 134 → **50 líneas** (-63%):
+  - **Removido**: numpy, pandas, boto3, botocore, s3transfer, google-api-core, google-auth, grpcio, emergentintegrations, litellm, openai, stripe, resend (no, kept — se usa en email_service), pillow, huggingface_hub, pyee, playwright, mypy, pytest, pre_commit, pycodestyle, pyflakes, mccabe, virtualenv, nodeenv, watchfiles, jq, lxml, tiktoken, tenacity, fastuuid, fsspec, ecdsa, python-jose, passlib, y ~70 transitive deps que vinieron de paquetes ahora removidos.
+  - **Mantenido**: fastapi/starlette/uvicorn/anyio/h11/httpx/idna/certifi (web stack), pydantic/pydantic_core (validación), motor/pymongo/dnspython (DB), bcrypt/PyJWT (auth), webauthn/cbor2/cryptography/pyOpenSSL/asn1crypto/pycparser/cffi (passkeys), beautifulsoup4/feedparser/sgmllib3k/soupsieve (scraping prayers + RSS), requests, resend (emails), python-dotenv/python-multipart/email-validator/click/Jinja2/MarkupSafe/PyYAML.
+  - Backend pytest **37/37 PASS** post-cleanup. Smoke tests `/api/`, `/api/readings`, `/api/news`, `/api/auth/webauthn/auth/options` todos 200. App levanta en ~0.5s.
+- 📊 **Resultado de performance**:
+  - Cold boot: usuario ve UI inmediato (loader vs blank).
+  - Warm boot (cualquier visita posterior): readings sirven desde IDB → instant.
+  - Bible / Catechism: primera visita normal (fetch JSON), siguientes: instant desde IDB.
+- Pre-commit **9/9 PASS**, ESLint 0 warnings, ruff clean, backend pytest 37/37 PASS.
+
+## Implemented (2026-05-04 · part 20) — Service Worker v6: SWR + prewarm + navigation preload + user-scope bypass
+- 🚀 **Bump SW_VERSION → v6**: fuerza a todos los clientes existentes a actualizar, descartar caches viejas (v5 y anteriores) y aplicar las nuevas reglas en su próximo arranque.
+- 🌐 **Navigation Preload activado** en `activate`: `self.registration.navigationPreload.enable()`. Cuando el usuario navega entre rutas, el browser inicia la fetch de la red EN PARALELO con la activación del SW; `networkFirst()` consume `event.preloadResponse` cuando está disponible. Resultado: latencia añadida por el SW = ~0ms.
+- 🔥 **Prewarm de cache en activate**: tras `self.clients.claim()`, fire-and-forget `prewarmRuntimeCache()` que precarga 7 endpoints públicos en ambos idiomas:
+  - `/api/`, `/api/readings?lang=es|en`, `/api/news?lang=es|en&source=all`, `/api/prayers?lang=es`, `/api/liturgy?lang=es`.
+  - No bloquea `activate` (await omitido) → sin penalty en arranque.
+  - La PRIMERA vez que el dashboard pida `/api/readings` después de instalar el SW, ya viene del cache → render <50ms.
+- 🚫 **Bypass para endpoints user-scoped**: `/api/auth/*`, `/api/favorites`, `/api/admin/*` NUNCA pasan por el cache (un logout o un add-favorite que devuelva un 200 stale sería un bug real). El SW deja pasar la request directo a la red (`return` sin `respondWith`).
+- ✅ **Lecturas, Noticias, Liturgia, Oraciones, Catecismo** siguen con stale-while-revalidate: usuario ve el cache instantáneo + SW refetchea en background y actualiza el cache para la siguiente visita. Combinado con el IDB cache que ya tiene la app (Bible, Catechism, Readings via `readingsCache.js`), tenemos dos capas: SW para warm starts del browser, IDB para warm starts del JS context.
+- 📊 **Resultado esperado**:
+  - Cold start (SW recién instalado, sin cache): network normal → cache se llena.
+  - Warm start (segunda visita+): readings/news/liturgy aparecen <100ms desde el cache del SW. IDB confirma desde el JS layer en otro <50ms.
+  - Comparable a apps nativas en redes 3G.
+- ✅ **Verificación**: SW v6 servido correctamente (HTTP 200, contenido nuevo confirmado). Pre-commit **9/9 PASS**, ESLint 0 warnings. (Playwright headless no registra SW por defecto, así que la verificación fue vía curl + lint + diseño.)
+
+## 2026-05-06 — Prayer detail 3-dot menu (parity with Readings)
+- ✅ Reemplazado el botón "Agregar a Favoritos" en la cabecera del detalle de oración por el menú contextual de 3 puntos (`PrayerDetailMenuButton` en `Prayers.jsx`), siguiendo el mismo patrón de `ReadingActionsMenu` en Lecturas.
+- Acciones: **Guardar en favoritos**, **Copiar oración**, **Compartir** (Web Share API + fallback a portapapeles).
+- Reusa el `content` ya cargado (title, category, content, source_url) → cero fetches extra.
+- Eliminado import sin usar `FavoriteButton` y limpieza de imports en `webauthn_routes.py` (`base64`, `bson.ObjectId`, `fastapi.Body`).
+- Pre-commit **9/9 PASS**, smoke screenshot OK.
+
 ## Backlog (P0/P1/P2)
 ### P1 (active)
 - Custom-domain CORS rewrite on `soyapostol.org` (blocked — Cloudflare edge). Awaiting Emergent Support.

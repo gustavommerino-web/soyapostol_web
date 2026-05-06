@@ -42,12 +42,11 @@ export function useVotdFavorite({ resolved }) {
                         (!f.metadata?.lang || f.metadata.lang === lang),
                 );
                 if (match) setSavedId(match.id);
-            } catch (e) {
+            } catch {
                 // Non-fatal — leaving savedId=null means the heart button
                 // will show "save" instead of "remove" which is still
                 // correct (clicking adds another favorite idempotently on
                 // the backend side).
-                console.warn("[VerseOfTheDay] favorites lookup failed:", e?.message || e);
             }
         })();
         return () => { cancelled = true; };
@@ -80,8 +79,7 @@ export function useVotdFavorite({ resolved }) {
                 refreshCount();
                 toast.success(t("common.saved"));
             }
-        } catch (e) {
-            console.warn("[VerseOfTheDay] favorite toggle failed:", e?.message || e);
+        } catch {
             toast.error(t("common.error"));
         }
     }, [user, resolved, savedId, lang, t, refreshCount]);

@@ -31,11 +31,54 @@
         <link rel="apple-touch-icon" sizes="192x192" href="%PUBLIC_URL%/icon-192.png" />
         <link rel="apple-touch-icon" sizes="512x512" href="%PUBLIC_URL%/icon-512.png" />
         <title>soyapostol</title>
+        <style>
+            /* Boot loader visible the instant the document hits the
+               viewport — covers the gap between HTML paint and React
+               first paint. Removed once `<body class="app-ready">`
+               is set by the React entrypoint. */
+            html, body { background: #faf6f0; color: #2d2926; }
+            #boot-loader {
+                position: fixed; inset: 0;
+                display: flex; flex-direction: column;
+                align-items: center; justify-content: center;
+                gap: 1.25rem;
+                background: #faf6f0; color: #2d2926;
+                font-family: ui-serif, Georgia, "Times New Roman", serif;
+                z-index: 9999;
+                opacity: 1;
+                transition: opacity .35s ease;
+            }
+            #boot-loader img {
+                width: 64px; height: 64px;
+                animation: boot-pulse 1.6s ease-in-out infinite;
+            }
+            #boot-loader .boot-title {
+                font-size: 28px; letter-spacing: -.02em; margin: 0;
+            }
+            #boot-loader .boot-sub {
+                font-size: 13px; color: #7a7166;
+                font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+                letter-spacing: .12em; text-transform: uppercase;
+                margin: 0;
+            }
+            @keyframes boot-pulse {
+                0%,100% { opacity: 1; transform: scale(1); }
+                50%     { opacity: .55; transform: scale(.94); }
+            }
+            body.app-ready #boot-loader {
+                opacity: 0; pointer-events: none;
+            }
+        </style>
         <script>window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);</script>
         <script src="https://assets.emergent.sh/scripts/emergent-main.js"></script>
     </head>
     <body>
         <noscript>You need to enable JavaScript to run this app.</noscript>
+        <div id="boot-loader" aria-hidden="true">
+            <img src="%PUBLIC_URL%/logo.png" alt="" />
+            <p class="boot-title">soyapostol</p>
+            <p class="boot-sub">Cargando…</p>
+        </div>
         <div id="root"></div>
         <!--
       This HTML file is a template.

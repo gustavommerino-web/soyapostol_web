@@ -2,19 +2,68 @@ import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLang } from "@/contexts/LangContext";
+import { toast } from "sonner";
+import {
+    authenticateWithPasskey,
+    passkeyHint,
+    platformAuthenticatorAvailable,
+} from "@/lib/webauthn";
+import { FingerprintSimple } from "@phosphor-icons/react";
 
 const HERO_IMG = "https://images.pexels.com/photos/33527869/pexels-photo-33527869.jpeg";
 
 export default function Login() {
-    const { login, error, user, setError } = useAuth();
-    const { t } = useLang();
+    const { login, error, user, setUser, setError } = useAuth();
+    const { t, lang } = useLang();
     const navigate = useNavigate();
     const [email, setEmail] = React.useState("");
     const [password, setPassword] = React.useState("");
     const [submitting, setSubmitting] = React.useState(false);
 
+    // Whether to expose the "Sign in with Face ID / Touch ID" button.
+    // Two conditions must hold: (1) the browser supports a platform
+    // authenticator, and (2) we have a localStorage hint that the user
+    // has previously registered a passkey on this device. Without the
+    // hint the button would always appear and confuse first-time users
+    // who never enabled biometric login.
+    const [bioReady, setBioReady] = React.useState(false);
+    const [bioBusy, setBioBusy] = React.useState(false);
+
     React.useEffect(() => { if (user) navigate("/"); }, [user, navigate]);
     React.useEffect(() => { setError && setError(""); }, [setError]);
+
+    React.useEffect(() => {
+        let cancelled = false;
+        if (!passkeyHint.has()) return undefined;
+        platformAuthenticatorAvailable().then((ok) => {
+            if (!cancelled) setBioReady(ok);
+        });
+        return () => { cancelled = true; };
+    }, []);
+
+    const tryPasskey = React.useCallback(async () => {
+        setBioBusy(true);
+        try {
+            const userPayload = await authenticateWithPasskey();
+            setUser(userPayload);
+            navigate("/");
+        } catch (e) {
+            // Cancelled / no credential / user verification failed → silently
+            // surface the password form. We only toast for unexpected errors.
+            const msg = e?.name || "";
+            if (msg === "NotAllowedError" || msg === "AbortError") {
+                // user cancelled — no toast, just stay on the page
+            } else if (e?.response?.status === 401) {
+                toast.error(lang === "es" ? "Pasaporte no reconocido" : "Passkey not recognised");
+                passkeyHint.clear();
+                setBioReady(false);
+            } else {
+                toast.error(lang === "es" ? "Face ID falló — usa contraseña" : "Face ID failed — use password");
+            }
+        } finally {
+            setBioBusy(false);
+        }
+    }, [navigate, setUser, lang]);
 
     const onSubmit = async (e) => {
         e.preventDefault();
@@ -44,6 +93,28 @@ export default function Login() {
                     </div>
                     <p className="label-eyebrow mb-3">{t("common.welcome_back")}</p>
                     <h1 className="heading-serif text-4xl sm:text-5xl tracking-tight leading-none mb-10">{t("common.sign_in")}</h1>
+
+                    {bioReady && (
+                        <div className="mb-8" data-testid="login-passkey-section">
+                            <button
+                                type="button"
+                                onClick={tryPasskey}
+                                disabled={bioBusy}
+                                data-testid="login-passkey-btn"
+                                className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 rounded-md border-2 border-sangre text-sangre hover:bg-sangre hover:text-sand-50 transition-colors ui-sans text-sm font-semibold disabled:opacity-60"
+                            >
+                                <FingerprintSimple size={20} weight="duotone" />
+                                {bioBusy
+                                    ? t("common.loading")
+                                    : (lang === "es" ? "Iniciar sesión con Face ID / Touch ID" : "Sign in with Face ID / Touch ID")}
+                            </button>
+                            <div className="flex items-center gap-3 my-6 text-stoneFaint text-xs uppercase tracking-widest ui-sans">
+                                <span className="flex-1 h-px bg-sand-300" />
+                                <span>{lang === "es" ? "o usa contraseña" : "or use password"}</span>
+                                <span className="flex-1 h-px bg-sand-300" />
+                            </div>
+                        </div>
+                    )}
 
                     <form onSubmit={onSubmit} className="space-y-5" data-testid="login-form">
                         <div>

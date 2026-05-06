@@ -20,6 +20,11 @@ export function AuthProvider({ children }) {
         try {
             const res = await api.post("/auth/login", { email, password });
             setUser(res.data);
+            // Mark a one-shot flag so the BiometricEnrollPrompt component
+            // can ask the user — once per device per session — whether
+            // they want to enable Face ID for future visits. Cleared by
+            // the prompt itself after it shows.
+            try { localStorage.setItem("soyapostol_just_logged_in_pw", "1"); } catch { /* ignore */ }
             return true;
         } catch (e) {
             setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
@@ -32,6 +37,7 @@ export function AuthProvider({ children }) {
         try {
             const res = await api.post("/auth/register", { email, password, name });
             setUser(res.data);
+            try { localStorage.setItem("soyapostol_just_logged_in_pw", "1"); } catch { /* ignore */ }
             return true;
         } catch (e) {
             setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);

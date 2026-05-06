@@ -27,6 +27,7 @@ import {
     SheetTrigger,
 } from "@/components/ui/sheet";
 import { Toaster } from "sonner";
+import BiometricEnrollPrompt from "@/components/BiometricEnrollPrompt";
 
 // Navigation ordering (UX rules):
 //   Top-left logo → Dashboard (always)
@@ -253,6 +254,7 @@ export default function Layout() {
             </nav>
 
             <Toaster position="top-center" richColors closeButton />
+            <BiometricEnrollPrompt />
         </div>
     );
 }
