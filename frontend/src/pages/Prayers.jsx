@@ -14,6 +14,49 @@ import {
 
 const PRAYERS_CHANGED = "soyapostol-prayers-changed";
 
+function escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Strips diacritics so that a search for "oracion" still matches "oración".
+// Length-preserving on the canonical-decomposition output, then we drop the
+// combining marks, which is fine for highlighting because we run the regex
+// against the ORIGINAL string (the regex itself is built from the user's
+// raw query, so the match positions stay aligned visually).
+function stripDiacritics(s) {
+    return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function highlightText(text, query) {
+    const q = (query || "").trim();
+    if (!q) return text;
+    // Build a regex on the *normalised* needle, then apply it to a
+    // normalised view of `text`, but emit slices from the ORIGINAL text so
+    // accents survive in the rendered output.
+    const needle = stripDiacritics(q);
+    if (!needle) return text;
+    const re = new RegExp(escapeRegex(needle), "ig");
+    const norm = stripDiacritics(text);
+    const out = [];
+    let last = 0;
+    let m;
+    while ((m = re.exec(norm)) !== null) {
+        if (m.index > last) out.push(text.slice(last, m.index));
+        out.push(
+            <mark
+                key={`${m.index}-${out.length}`}
+                className="bg-sangre/15 text-stone900 rounded px-0.5"
+            >
+                {text.slice(m.index, m.index + m[0].length)}
+            </mark>,
+        );
+        last = m.index + m[0].length;
+        if (m[0].length === 0) re.lastIndex += 1;
+    }
+    if (last < text.length) out.push(text.slice(last));
+    return out;
+}
+
 export default function Prayers() {
     const { lang, t } = useLang();
     const { user } = useAuth();
@@ -22,6 +65,9 @@ export default function Prayers() {
     const [categories, setCategories] = React.useState([]);
     const [loading, setLoading] = React.useState(true);
     const [query, setQuery] = React.useState("");
+    const [debouncedQuery, setDebouncedQuery] = React.useState("");
+    const [searchResults, setSearchResults] = React.useState(null);  // null = not searching
+    const [searching, setSearching] = React.useState(false);
     const [selected, setSelected] = React.useState(null);
     const [content, setContent] = React.useState(null);
     const [contentLoading, setContentLoading] = React.useState(false);
@@ -47,6 +93,38 @@ export default function Prayers() {
         return () => window.removeEventListener(PRAYERS_CHANGED, handler);
     }, [refresh]);
 
+    // Debounce the live query → debouncedQuery (250 ms).
+    React.useEffect(() => {
+        const id = setTimeout(() => setDebouncedQuery(query.trim()), 250);
+        return () => clearTimeout(id);
+    }, [query]);
+
+    // Fetch full-text search whenever the debounced query is ≥ 2 chars.
+    // Shorter strings reuse the title-only client filter to avoid the
+    // 80-row server scan.
+    React.useEffect(() => {
+        if (debouncedQuery.length < 2) {
+            setSearchResults(null);
+            setSearching(false);
+            return;
+        }
+        let cancelled = false;
+        setSearching(true);
+        (async () => {
+            try {
+                const r = await api.get(
+                    `/prayers/search?lang=${lang}&q=${encodeURIComponent(debouncedQuery)}`,
+                );
+                if (!cancelled) setSearchResults(r.data.categories || []);
+            } catch {
+                if (!cancelled) setSearchResults([]);
+            } finally {
+                if (!cancelled) setSearching(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [debouncedQuery, lang]);
+
     const open = async (item) => {
         setSelected(item);
         setContent(null);
@@ -58,12 +136,28 @@ export default function Prayers() {
     };
 
     const filteredCategories = React.useMemo(() => {
-        if (!query) return categories;
-        const q = query.toLowerCase();
-        return categories
-            .map((c) => ({ ...c, items: c.items.filter((i) => i.title.toLowerCase().includes(q)) }))
-            .filter((c) => c.items.length > 0);
-    }, [categories, query]);
+        const q = query.trim();
+        // Server-side full-text results take priority once we have any
+        // (debounced) query of length ≥ 2. They already include `snippet`
+        // and `match_field` per item.
+        if (q.length >= 2 && searchResults !== null) return searchResults;
+
+        // For 1-char queries we fall back to the cheap title-only filter
+        // over the cached catalogue — keeps typing snappy and avoids
+        // sending 80-row scans for "a", "e", etc.
+        if (q.length >= 1) {
+            const needle = stripDiacritics(q.toLowerCase());
+            return categories
+                .map((c) => ({
+                    ...c,
+                    items: c.items.filter((i) =>
+                        stripDiacritics((i.title || "").toLowerCase()).includes(needle),
+                    ),
+                }))
+                .filter((c) => c.items.length > 0);
+        }
+        return categories;
+    }, [categories, query, searchResults]);
 
     if (selected) {
         return (
@@ -114,6 +208,19 @@ export default function Prayers() {
                 </p>
             )}
 
+            {query.trim().length >= 2 && searching && filteredCategories.length === 0 && (
+                <p className="text-stoneMuted text-sm mb-6" data-testid="prayers-search-loading">
+                    {t("common.loading")}
+                </p>
+            )}
+            {query.trim().length >= 1 && !searching && filteredCategories.length === 0 && (
+                <p className="text-stoneMuted text-sm mb-6" data-testid="prayers-search-empty">
+                    {lang === "en"
+                        ? `No prayers match “${query.trim()}”.`
+                        : `Ninguna oración coincide con “${query.trim()}”.`}
+                </p>
+            )}
+
             <div className="space-y-12" data-testid="prayers-categories">
                 {filteredCategories.map((cat) => (
                     <section key={cat.category} data-testid={`cat-${cat.category}`}>
@@ -126,6 +233,7 @@ export default function Prayers() {
                                     key={item.slug}
                                     item={item}
                                     category={cat.category}
+                                    query={query}
                                     onOpen={() => open(item)}
                                 />
                             ))}
@@ -142,13 +250,14 @@ export default function Prayers() {
 /* PrayerCard with long-press context menu                            */
 /* ================================================================== */
 
-function PrayerCard({ item, category, onOpen }) {
+function PrayerCard({ item, category, onOpen, query }) {
     const [menuOpen, setMenuOpen] = React.useState(false);
 
     // useLongPress fires on a 500ms hold (or right-click on desktop). The
     // hook's `onPointerUp` swallows the next click event when the timer
     // fires, so the regular onClick→onOpen handler won't run.
     const handlers = useLongPress(() => setMenuOpen(true));
+    const hasSnippet = !!item.snippet;
 
     return (
         <li className="relative">
@@ -159,7 +268,17 @@ function PrayerCard({ item, category, onOpen }) {
                 style={{ WebkitUserSelect: "none", WebkitTouchCallout: "none" }}
                 {...handlers}
             >
-                <p className="reading-serif text-base leading-snug">{item.title}</p>
+                <p className="reading-serif text-base leading-snug">
+                    {highlightText(item.title, query)}
+                </p>
+                {hasSnippet && (
+                    <p
+                        className="ui-sans text-xs text-stoneMuted leading-relaxed mt-2 line-clamp-3"
+                        data-testid={`prayer-item-${item.slug}-snippet`}
+                    >
+                        {highlightText(item.snippet, query)}
+                    </p>
+                )}
             </button>
             {menuOpen && (
                 <PrayerContextMenu

@@ -69,6 +69,31 @@ def _hash_slug(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
 
 
+# Length-preserving normaliser used by /search. We MUST keep the string
+# length identical so the match offset in the normalised content maps
+# 1-to-1 to an offset in the original content (which is what we slice
+# for the snippet). That rules out collapsing whitespace or stripping
+# punctuation here.
+_SEARCH_TRANS = str.maketrans({
+    "á": "a", "à": "a", "ä": "a", "â": "a", "ã": "a",
+    "é": "e", "è": "e", "ë": "e", "ê": "e",
+    "í": "i", "ì": "i", "ï": "i", "î": "i",
+    "ó": "o", "ò": "o", "ö": "o", "ô": "o", "õ": "o",
+    "ú": "u", "ù": "u", "ü": "u", "û": "u",
+    "ñ": "n", "ç": "c",
+    "Á": "a", "À": "a", "Ä": "a", "Â": "a", "Ã": "a",
+    "É": "e", "È": "e", "Ë": "e", "Ê": "e",
+    "Í": "i", "Ì": "i", "Ï": "i", "Î": "i",
+    "Ó": "o", "Ò": "o", "Ö": "o", "Ô": "o", "Õ": "o",
+    "Ú": "u", "Ù": "u", "Ü": "u", "Û": "u",
+    "Ñ": "n", "Ç": "c",
+})
+
+
+def _search_normalize(s: str) -> str:
+    return (s or "").translate(_SEARCH_TRANS).lower()
+
+
 def _doc_to_public(doc: dict, full: bool = False) -> dict:
     out = {
         "id": str(doc["_id"]),
@@ -257,6 +282,82 @@ async def list_prayers(request: Request, lang: str = Query("es")):
         items = sorted(cats[cat], key=lambda i: i["title"].lower())
         categories.append({"category": cat, "items": items})
     return {"lang": lang, "categories": categories}
+
+
+@router.get("/search")
+async def search_prayers(
+    request: Request,
+    q: str = Query("", min_length=0, max_length=120),
+    lang: str = Query("es"),
+    limit: int = Query(80, ge=1, le=200),
+):
+    """Free-text prayer search across title + content.
+
+    Match is case- and accent-insensitive; we normalise both query and the
+    indexed fields with the same `_search_normalize` helper so "oración"
+    and "oracion" hit the same documents. Returns flat results grouped by
+    category, with a 240-char snippet centred on the first content match
+    so the frontend can render `<mark>`-style highlights without paging
+    the whole prayer body.
+    """
+    if lang not in ("es", "en"):
+        lang = "es"
+    needle = _search_normalize(q).strip()
+    if not needle:
+        return {"lang": lang, "query": q, "categories": []}
+
+    db = request.app.state.db
+    cursor = db.prayers.find(
+        {"lang": lang},
+        {"slug": 1, "title": 1, "category": 1, "content": 1, "source": 1, "source_url": 1},
+    )
+
+    SNIPPET = 240
+    cats: dict[str, list[dict]] = {}
+    total = 0
+    async for d in cursor:
+        if total >= limit:
+            break
+        title = d.get("title", "") or ""
+        content = d.get("content", "") or ""
+        n_title = _search_normalize(title)
+        n_content = _search_normalize(content)
+        in_title = needle in n_title
+        idx = n_content.find(needle)
+        if not in_title and idx < 0:
+            continue
+
+        if idx >= 0:
+            # Center the snippet on the first content match. Use the
+            # ORIGINAL string offsets — _search_normalize preserves length
+            # because it strips diacritics 1-to-1 and lowercases.
+            start = max(0, idx - SNIPPET // 2)
+            end = min(len(content), start + SNIPPET)
+            start = max(0, end - SNIPPET)
+            snippet = content[start:end]
+            if start > 0:
+                snippet = "… " + snippet
+            if end < len(content):
+                snippet = snippet + " …"
+        else:
+            snippet = content[:SNIPPET] + (" …" if len(content) > SNIPPET else "")
+
+        cat = d.get("category", "General")
+        cats.setdefault(cat, []).append({
+            "slug": d["slug"],
+            "title": title,
+            "category": cat,
+            "snippet": snippet,
+            "match_field": "title" if in_title else "content",
+            "source": d.get("source", "custom"),
+        })
+        total += 1
+
+    categories = []
+    for cat in sorted(cats.keys(), key=lambda x: x.lower()):
+        items = sorted(cats[cat], key=lambda i: i["title"].lower())
+        categories.append({"category": cat, "items": items})
+    return {"lang": lang, "query": q, "categories": categories, "total": total}
 
 
 @router.get("/{slug}")
